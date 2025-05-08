@@ -9,7 +9,6 @@ import {DecentralizedStableCoin} from "../src/DecentralizedStableCoin.sol";
 contract TestDecentralizedStableCoin is Test {
   DecentralizedStableCoin stableCoinToken;
   address owner;
-  address bob = makeAddr("bob");
   uint256 constant amount = 1 ether;
   uint256 constant amountToBurn = 0.5 ether;
 
