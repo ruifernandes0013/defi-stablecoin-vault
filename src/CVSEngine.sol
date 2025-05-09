@@ -158,6 +158,13 @@ contract CVSEngine is ReentrancyGuard {
   //////////////////////
   //External Functions//
   //////////////////////
+  /**
+   * @notice Deposits collateral and mints CVS tokens in a single transaction.
+   * @param collateralAddress The ERC20 token address to be deposited (must be allowed).
+   * @param collateralAmount Amount of collateral to deposit.
+   * @param amountCvsToMint Amount of CVS tokens to mint.
+   * @dev This combines collateral deposit and minting for user convenience.
+   */
   function depositCollateralAndMintCvs(
     address collateralAddress,
     uint256 collateralAmount,
@@ -167,15 +174,29 @@ contract CVSEngine is ReentrancyGuard {
     mintCvs(amountCvsToMint);
   }
 
+  /**
+   * @notice Placeholder for redeeming collateral by returning CVS tokens.
+   * @dev Not yet implemented.
+   */
   function redeemCollateralForCvs() external {}
 
+  /**
+   * @notice Placeholder for withdrawing collateral (no CVS involved).
+   * @dev Not yet implemented.
+   */
   function redeemCollateral() external {}
 
+  /**
+   * @notice Placeholder for burning CVS tokens to reduce debt.
+   * @dev Not yet implemented.
+   */
   function burnCvs() external {}
 
+  /**
+   * @notice Placeholder for liquidating unhealthy positions.
+   * @dev Not yet implemented.
+   */
   function liquidate() external {}
-
-  function getHealthFactor() external view {}
 
   //////////////////////
   //Public Functions//
@@ -226,16 +247,18 @@ contract CVSEngine is ReentrancyGuard {
     emit CollateralDeposited(msg.sender, collateralAddress, collateralAmount);
   }
 
+  /**
+   * @notice Mints CVS tokens to the user based on their account's health factor.
+   * @notice Follows the CEI pattern (Checks, Effects, Interations)
+   * @param amountToMint Amount of CVS tokens the user wants to mint.
+   * @dev Updates user debt, checks health factor, and mints tokens if safe.
+   */
   function mintCvs(
     uint256 amountToMint
   ) internal moreThanZero(amountToMint) nonReentrant {
-    // Step 1: Update internal debt BEFORE checking health
     s_CvsMinted[msg.sender] += amountToMint;
-
-    // Step 2: Ensure user remains safe
     _revertIfHealthFactorIsBroken(msg.sender);
 
-    // Step 3: Mint CVS tokens
     bool success = i_cvsToken.mint(msg.sender, amountToMint);
     if (!success) {
       revert CVSEngine_TokenTransferFailed();
@@ -245,6 +268,10 @@ contract CVSEngine is ReentrancyGuard {
   //////////////////////
   //private functions//
   //////////////////////
+  /**
+   * @notice Reverts if the user's health factor falls below 1.0 (PRECISION).
+   * @param user The address of the account to check.
+   */
   function _revertIfHealthFactorIsBroken(address user) private view {
     uint256 hf = _healthFactor(user);
     if (hf < PRECISION) {
@@ -252,6 +279,11 @@ contract CVSEngine is ReentrancyGuard {
     }
   }
 
+  /**
+   * @notice Computes the health factor of a user.
+   * @param user The address of the user.
+   * @return A scaled health factor (1e18 = safe; <1e18 = unhealthy).
+   */
   function _healthFactor(address user) private view returns (uint256) {
     uint256 collateralInUsd = getAccountCollateralValueInUSD(user);
     uint256 debt = s_CvsMinted[user];
@@ -267,6 +299,11 @@ contract CVSEngine is ReentrancyGuard {
   //view & pure functions//
   //////////////////////
 
+  /**
+   * @notice Returns the total USD value of a user’s deposited collateral across all allowed tokens.
+   * @param user The address of the user.
+   * @return collateralInUsd Total collateral value in USD.
+   */
   function getAccountCollateralValueInUSD(
     address user
   ) public view returns (uint256 collateralInUsd) {
@@ -279,6 +316,12 @@ contract CVSEngine is ReentrancyGuard {
     }
   }
 
+  /**
+   * @notice Converts an amount of a token to its USD equivalent using Chainlink feed.
+   * @param priceFeed Chainlink AggregatorV3Interface for the token.
+   * @param collateralAmount Amount of the token. (must have 18 decimals)
+   * @return collateralInUsd USD equivalent of the token amount. (with 18 decimals)
+   */
   function getUsdValue(
     address priceFeed,
     uint256 collateralAmount
@@ -290,6 +333,12 @@ contract CVSEngine is ReentrancyGuard {
     collateralInUsd = (collateralAmount * usdPrice) / PRECISION;
   }
 
+  /**
+   * @notice Converts a USD amount to CVS tokens using the collateralization ratio.
+   *          (all with 18 decimals)
+   * @param amountInUsd The USD value.
+   * @return amountInCvs Corresponding CVS token amount that can be minted.
+   */
   function convertToCvs(
     uint256 amountInUsd
   ) public pure returns (uint256 amountInCvs) {
@@ -297,10 +346,21 @@ contract CVSEngine is ReentrancyGuard {
     amountInCvs = (amountInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
   }
 
+  /**
+   * @notice Returns the amount of CVS tokens minted by a user.
+   * @param user The address of the user.
+   * @return cvsMinted Amount of minted CVS.
+   */
   function getCvsMinted(address user) public view returns (uint256 cvsMinted) {
     cvsMinted = s_CvsMinted[user];
   }
 
+  /**
+   * @notice Returns the amount of a specific collateral token deposited by a user.
+   * @param user The address of the user.
+   * @param collateralAddress The address of the collateral token.
+   * @return collateral Amount of collateral token deposited.
+   */
   function getCollateralAmountByToken(
     address user,
     address collateralAddress
@@ -308,6 +368,11 @@ contract CVSEngine is ReentrancyGuard {
     collateral = s_collateralDeposited[user][collateralAddress];
   }
 
+  /**
+   * @notice Human-readable health status of the user.
+   * @param user The address of the user.
+   * @return "Healthy" or "Not Healthy" based on the health factor.
+   */
   function isHealthy(address user) public view returns (string memory) {
     uint256 hf = _healthFactor(user);
     return hf < PRECISION ? "Not Healthy" : "Healthy";

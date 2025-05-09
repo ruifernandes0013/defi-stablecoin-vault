@@ -3,11 +3,11 @@
 pragma solidity ^0.8.26;
 
 import {Test, console} from "forge-std/Test.sol";
-import {DeployDecentralizedStableCoin} from "../script/DeployDecentralizedStableCoin.s.sol";
-import {CVSEngine} from "../src/CVSEngine.sol";
-import {DecentralizedStableCoin} from "../src/DecentralizedStableCoin.sol";
-import {HelperConfig} from "../script/HelperConfig.sol";
-import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
+import {DeployDecentralizedStableCoin} from "../../script/DeployDecentralizedStableCoin.s.sol";
+import {CVSEngine} from "../../src/CVSEngine.sol";
+import {DecentralizedStableCoin} from "../../src/DecentralizedStableCoin.sol";
+import {HelperConfig} from "../../script/HelperConfig.sol";
+import {ERC20Mock} from "../mocks/ERC20Mock.sol";
 
 contract TestDecentralizedStableCoin is Test {
   DecentralizedStableCoin stableCoinToken;
@@ -15,6 +15,7 @@ contract TestDecentralizedStableCoin is Test {
   HelperConfig helperConfig;
   address weth;
   address wbtc;
+  address wethUsdPriceFeed;
   address user = makeAddr("user");
   uint256 constant CVS_TO_MINT = 100 * 1e18;
   uint256 public constant STARTING_USER_BALANCE = 10 ether;
@@ -23,7 +24,7 @@ contract TestDecentralizedStableCoin is Test {
     DeployDecentralizedStableCoin deployer = new DeployDecentralizedStableCoin();
     (stableCoinToken, cvsEngine, helperConfig) = deployer.run();
 
-    (, , weth, wbtc, ) = helperConfig.activeNetworkConfig();
+    (wethUsdPriceFeed, , weth, wbtc, ) = helperConfig.activeNetworkConfig();
     ERC20Mock(weth).mint(user, STARTING_USER_BALANCE);
   }
 
@@ -156,5 +157,14 @@ contract TestDecentralizedStableCoin is Test {
     assertEq(cvsEngine.getCvsMinted(user), CVS_TO_MINT);
 
     vm.stopPrank();
+  }
+
+  function testGetUsdValue() public view {
+    uint256 ethAmount = 15e18;
+    // 15e18 * 2000/ETH = 30,000e18
+    uint256 expectedUsd = 30000e18;
+    uint256 actualUsd = cvsEngine.getUsdValue(wethUsdPriceFeed, ethAmount);
+
+    assertEq(actualUsd, expectedUsd);
   }
 }
