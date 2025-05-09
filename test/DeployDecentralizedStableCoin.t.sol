@@ -14,7 +14,7 @@ contract TestDecentralizedStableCoin is Test {
 
   function setUp() public {
     DeployDecentralizedStableCoin deployer = new DeployDecentralizedStableCoin();
-    stableCoinToken = deployer.run();
+    (stableCoinToken, , ) = deployer.run();
     owner = stableCoinToken.owner();
   }
 

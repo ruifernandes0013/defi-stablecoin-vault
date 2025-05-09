@@ -23,11 +23,44 @@
 // private
 // view & pure functions
 
+/**
+ * @title Variable Glossary (Developer Reference)
+ *
+ * This section documents all state variables used in the CVSEngine contract
+ * to provide a clear overview of their purpose and naming conventions.
+ *
+ * Naming Conventions:
+ *  - `s_` prefix: Denotes a storage (state) variable
+ *  - `i_` prefix: Denotes an immutable variable set at deployment
+ *
+ * Variables:
+ *
+ * - s_priceFeeds:
+ *     Mapping from allowed collateral token addresses to their Chainlink price feed addresses.
+ *     Used to fetch real-time USD value of each collateral type.
+ *
+ * - s_vaults:
+ *     Nested mapping tracking each user's collateral and debt per token.
+ *     Format: user address => token address => Vault struct.
+ *     Vault struct includes:
+ *       - collateralAmount: Total collateral deposited by the user for that token
+ *       - debt: Total CVS tokens minted (owed) against that collateral
+ *
+ * - s_collateralAddresses:
+ *     Dynamic array of all supported collateral token addresses.
+ *     Used for enumeration and validation.
+ *
+ * - i_cvsToken:
+ *     Immutable reference to the CVS stablecoin contract.
+ *     Used for minting and burning CVS tokens during engine operations.
+ */
+
 pragma solidity ^0.8.26;
 
 import {DecentralizedStableCoin} from "../src/DecentralizedStableCoin.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 /**
  * @title CVSEngine
@@ -58,29 +91,31 @@ contract CVSEngine is ReentrancyGuard {
   error CVSEngine_CollateralTokenNotAllowed();
   error CVSEngine_TokenAddressesMustMatchPriceFeeds();
   error CVSEngine_TokenTransferFailed();
-  //////////////////////
-  // Type Declarations//
-  //////////////////////
-  struct Vault {
-    uint256 collateralAmount;
-    uint256 debt;
-  }
+  error CVSEngine_MaxAvailableTokensToMintExceed(uint256 hf, uint256 precision);
   //////////////////////
   // State Variables //
   //////////////////////
-  mapping(address token => address priceFeed) private s_priceFeeds;
-  mapping(address user => mapping(address collateralAddress => Vault vault))
-    private s_vaults;
+  mapping(address collateralAddress => address priceFeed) private s_priceFeeds;
+  mapping(address user => mapping(address collateralAddress => uint256 collateralAmount))
+    private s_collateralDeposited;
+
+  mapping(address user => uint256 amountInCvs) private s_CvsMinted;
+  address[] private s_collateralAddresses;
 
   DecentralizedStableCoin private immutable i_cvsToken;
+
+  uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
+  uint256 private constant PRECISION = 1e18;
+  uint256 private constant LIQUIDATION_THRESHOLD = 50;
+  uint256 private constant LIQUIDATION_PRECISION = 100;
 
   //////////////////////
   /// Events         ///
   //////////////////////
   event CollateralDeposited(
     address indexed user,
-    address indexed token,
-    uint256 indexed amount
+    address indexed collateralAddress,
+    uint256 indexed collateralAmount
   );
   //////////////////////
   /// Modifiers       ///
@@ -92,8 +127,8 @@ contract CVSEngine is ReentrancyGuard {
     _;
   }
 
-  modifier isAllowedCollateral(address tokenAddress) {
-    if (s_priceFeeds[tokenAddress] == address(0)) {
+  modifier isAllowedCollateral(address collateralAddress) {
+    if (s_priceFeeds[collateralAddress] == address(0)) {
       revert CVSEngine_CollateralTokenNotAllowed();
     }
     _;
@@ -103,16 +138,17 @@ contract CVSEngine is ReentrancyGuard {
   /// Functions      ///
   //////////////////////
   constructor(
-    address[] memory tokenAddress,
+    address[] memory collateralAddress,
     address[] memory priceFeed,
     address cvsTokenAddress
   ) {
-    if (tokenAddress.length != priceFeed.length) {
+    if (collateralAddress.length != priceFeed.length) {
       revert CVSEngine_TokenAddressesMustMatchPriceFeeds();
     }
 
-    for (uint256 i = 0; i < tokenAddress.length; i++) {
-      s_priceFeeds[tokenAddress[i]] = priceFeed[i];
+    for (uint256 i = 0; i < collateralAddress.length; i++) {
+      s_priceFeeds[collateralAddress[i]] = priceFeed[i];
+      s_collateralAddresses.push(collateralAddress[i]);
     }
 
     i_cvsToken = DecentralizedStableCoin(cvsTokenAddress);
@@ -121,6 +157,32 @@ contract CVSEngine is ReentrancyGuard {
   //////////////////////
   //External Functions//
   //////////////////////
+  function depositCollateralAndMintCvs(
+    address collateralAddress,
+    uint256 collateralAmount,
+    uint256 amountCvsToMint
+  ) external {
+    depositCollateral(collateralAddress, collateralAmount);
+    mintCvs(amountCvsToMint);
+  }
+
+  function redeemCollateralForCvs() external {}
+
+  function redeemCollateral() external {}
+
+  function burnCvs() external {}
+
+  function liquidate() external {}
+
+  function getHealthFactor() external view {}
+
+  //////////////////////
+  //Public Functions//
+  //////////////////////
+
+  //////////////////////
+  //Internal Functions//
+  //////////////////////
 
   /**
    * @notice Allows a user to deposit collateral into the protocol
@@ -128,11 +190,11 @@ contract CVSEngine is ReentrancyGuard {
    *  - Checks are the modifiers
    *  - Effects are the events
    *  - And external interactions is whith the ERC20 tokens
-   * @param tokenCollateralAddress The address of the ERC20 token being used as collateral (e.g., wETH or wBTC)
+   * @param collateralAddress The address of the ERC20 token being used as collateral (e.g., wETH or wBTC)
    * @param collateralAmount The amount of collateral to deposit
    *
    * Requirements:
-   * - tokenCollateralAddress must be a supported collateral asset
+   * - collateralAddress must be a supported collateral asset
    * - collateralAmount must be greater than zero
    * - The user must approve the protocol to transfer the specified amount before calling
    *
@@ -141,15 +203,15 @@ contract CVSEngine is ReentrancyGuard {
    * - Updates internal accounting to track deposited collateral per user
    */
   function depositCollateral(
-    address tokenCollateralAddress,
+    address collateralAddress,
     uint256 collateralAmount
   )
-    external
+    internal
     moreThanZero(collateralAmount)
-    isAllowedCollateral(tokenCollateralAddress)
+    isAllowedCollateral(collateralAddress)
     nonReentrant // reentrant is the most comman attacks in web3
   {
-    bool success = IERC20(tokenCollateralAddress).transferFrom(
+    bool success = IERC20(collateralAddress).transferFrom(
       msg.sender,
       address(this),
       collateralAmount
@@ -159,26 +221,94 @@ contract CVSEngine is ReentrancyGuard {
       revert CVSEngine_TokenTransferFailed();
     }
 
-    s_vaults[msg.sender][tokenCollateralAddress]
-      .collateralAmount += collateralAmount;
-    emit CollateralDeposited(
-      msg.sender,
-      tokenCollateralAddress,
-      collateralAmount
-    );
+    s_collateralDeposited[msg.sender][collateralAddress] += collateralAmount;
+    emit CollateralDeposited(msg.sender, collateralAddress, collateralAmount);
   }
 
-  function depositCollateralAndMintCvs() external {}
+  function mintCvs(
+    uint256 amountToMint
+  ) internal moreThanZero(amountToMint) nonReentrant {
+    // Step 1: Update internal debt BEFORE checking health
+    s_CvsMinted[msg.sender] += amountToMint;
 
-  function redeemCollateralForCvs() external {}
+    // Step 2: Ensure user remains safe
+    _revertIfHealthFactorIsBroken(msg.sender);
 
-  function redeemCollateral() external {}
+    // Step 3: Mint CVS tokens
+    bool success = i_cvsToken.mint(msg.sender, amountToMint);
+    if (!success) {
+      revert CVSEngine_TokenTransferFailed();
+    }
+  }
 
-  function mintCvs() external {}
+  //////////////////////
+  //private functions//
+  //////////////////////
+  function _revertIfHealthFactorIsBroken(address user) private view {
+    uint256 hf = _healthFactor(user);
+    if (hf < PRECISION) {
+      revert CVSEngine_MaxAvailableTokensToMintExceed(hf, PRECISION);
+    }
+  }
 
-  function burnCvs() external {}
+  function _healthFactor(address user) private view returns (uint256) {
+    uint256 collateralInUsd = getAccountCollateralValueInUSD(user);
+    uint256 debt = s_CvsMinted[user];
 
-  function liquidate() external {}
+    if (debt == 0) return type(uint256).max;
+    uint256 collateralAdjustedForThreshold = (collateralInUsd *
+      LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
 
-  function getHealthFactor() external view {}
+    return (collateralAdjustedForThreshold * PRECISION) / debt;
+  }
+
+  //////////////////////
+  //view & pure functions//
+  //////////////////////
+
+  function getAccountCollateralValueInUSD(
+    address user
+  ) public view returns (uint256 collateralInUsd) {
+    for (uint256 index = 0; index < s_collateralAddresses.length; index++) {
+      address collateralAddress = s_collateralAddresses[index];
+      uint256 collateralAmount = s_collateralDeposited[user][collateralAddress];
+
+      address priceFeed = s_priceFeeds[collateralAddress];
+      collateralInUsd += getUsdValue(priceFeed, collateralAmount);
+    }
+  }
+
+  function getUsdValue(
+    address priceFeed,
+    uint256 collateralAmount
+  ) public view returns (uint256 collateralInUsd) {
+    AggregatorV3Interface priceFeedAgg = AggregatorV3Interface(priceFeed);
+    (, int256 answer, , , ) = priceFeedAgg.latestRoundData();
+
+    uint256 usdPrice = uint256(answer) * ADDITIONAL_FEED_PRECISION;
+    collateralInUsd = (collateralAmount * usdPrice) / PRECISION;
+  }
+
+  function convertToCvs(
+    uint256 amountInUsd
+  ) public pure returns (uint amountInCvs) {
+    // amountInUsd * 100 / MIN_COLLATERAL_RATIO avoids floating points
+    amountInCvs = (amountInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+  }
+
+  function getCvsMinted(address user) public view returns (uint256 cvsMinted) {
+    cvsMinted = s_CvsMinted[user];
+  }
+
+  function getCollateralAmountByToken(
+    address user,
+    address collateralAddress
+  ) public view returns (uint256 collateral) {
+    collateral = s_collateralDeposited[user][collateralAddress];
+  }
+
+  function isHealthy(address user) public view returns (string memory) {
+    uint256 hf = _healthFactor(user);
+    return hf < PRECISION ? "Not Healthy" : "Healthy";
+  }
 }
