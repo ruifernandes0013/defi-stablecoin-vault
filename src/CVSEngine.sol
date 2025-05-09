@@ -54,7 +54,6 @@
  *     Immutable reference to the CVS stablecoin contract.
  *     Used for minting and burning CVS tokens during engine operations.
  */
-
 pragma solidity ^0.8.26;
 
 import {DecentralizedStableCoin} from "../src/DecentralizedStableCoin.sol";
@@ -95,6 +94,7 @@ contract CVSEngine is ReentrancyGuard {
   //////////////////////
   // State Variables //
   //////////////////////
+
   mapping(address collateralAddress => address priceFeed) private s_priceFeeds;
   mapping(address user => mapping(address collateralAddress => uint256 collateralAmount))
     private s_collateralDeposited;
@@ -120,6 +120,7 @@ contract CVSEngine is ReentrancyGuard {
   //////////////////////
   /// Modifiers       ///
   //////////////////////
+
   modifier moreThanZero(uint256 amount) {
     if (amount <= 0) {
       revert CVSEngine_AmountMustBeHigherThanZero();
@@ -291,7 +292,7 @@ contract CVSEngine is ReentrancyGuard {
 
   function convertToCvs(
     uint256 amountInUsd
-  ) public pure returns (uint amountInCvs) {
+  ) public pure returns (uint256 amountInCvs) {
     // amountInUsd * 100 / MIN_COLLATERAL_RATIO avoids floating points
     amountInCvs = (amountInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
   }

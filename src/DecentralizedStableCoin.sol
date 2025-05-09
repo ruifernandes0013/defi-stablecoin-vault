@@ -38,7 +38,6 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  * This is the contract meant to be governed by CVSEngine. This contract is just the ERC20 implementation
  * of our stablecoin system
  */
-
 contract DecentralizedStableCoin is ERC20Burnable, Ownable {
   error DecentralizedStableCoin_MustBeMoreThanZero();
   error DecentralizedStableCoin_BurnAmountExceedsBalance();
