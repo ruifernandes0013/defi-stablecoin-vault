@@ -92,7 +92,7 @@ contract CVSEngine is ReentrancyGuard {
   error CVSEngine_TokenTransferFailed();
   error CVSEngine_CantLiquidateHealthyUser();
   error CVSEngine__HealthFactorNotImproved();
-  error CVSEngine_MaxAvailableTokensToMintExceed(uint256 hf, uint256 precision);
+  error CVSEngine_HealthFactorTooLow(uint256 hf, uint256 precision);
   //////////////////////
   // State Variables //
   //////////////////////
@@ -396,7 +396,7 @@ contract CVSEngine is ReentrancyGuard {
   function _revertIfHealthFactorIsBroken(address user) private view {
     uint256 hf = _healthFactor(user);
     if (hf < PRECISION) {
-      revert CVSEngine_MaxAvailableTokensToMintExceed(hf, PRECISION);
+      revert CVSEngine_HealthFactorTooLow(hf, PRECISION);
     }
   }
 
@@ -549,11 +549,11 @@ contract CVSEngine is ReentrancyGuard {
   /**
    * @notice Human-readable health status of the user.
    * @param user The address of the user.
-   * @return "Healthy" or "Not Healthy" based on the health factor.
+   * @return "Healthy" or "Unhealthy" based on the health factor.
    */
   function isHealthy(address user) public view returns (string memory) {
     uint256 hf = _healthFactor(user);
-    return hf < PRECISION ? "Not Healthy" : "Healthy";
+    return hf < PRECISION ? "Unhealthy" : "Healthy";
   }
 
   function getPrecision() external pure returns (uint256) {
