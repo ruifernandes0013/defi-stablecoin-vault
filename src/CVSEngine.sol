@@ -60,6 +60,7 @@ import {DecentralizedStableCoin} from "../src/DecentralizedStableCoin.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {OracleLib} from "./lib/OracleLib.sol";
 
 /**
  * @title CVSEngine
@@ -83,6 +84,7 @@ import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interf
  * @notice This contract is VERY loosely based on the MakerDAO DSS (DAI) system.
  */
 contract CVSEngine is ReentrancyGuard {
+  using OracleLib for AggregatorV3Interface;
   //////////////////////
   /// Errors         ///
   //////////////////////
@@ -485,7 +487,7 @@ contract CVSEngine is ReentrancyGuard {
     uint256 collateralAmount
   ) public view returns (uint256 collateralInUsd) {
     AggregatorV3Interface priceFeedAgg = AggregatorV3Interface(priceFeed);
-    (, int256 answer, , , ) = priceFeedAgg.latestRoundData();
+    (, int256 answer, , , ) = priceFeedAgg.staleCheckLatestRoundData();
 
     uint256 usdPrice = uint256(answer) * ADDITIONAL_FEED_PRECISION;
     collateralInUsd = (collateralAmount * usdPrice) / PRECISION;
@@ -505,7 +507,7 @@ contract CVSEngine is ReentrancyGuard {
     AggregatorV3Interface priceFeedAgg = AggregatorV3Interface(
       s_priceFeeds[collateralAddress]
     );
-    (, int256 answer, , , ) = priceFeedAgg.latestRoundData();
+    (, int256 answer, , , ) = priceFeedAgg.staleCheckLatestRoundData();
 
     uint256 usdPrice = uint256(answer) * ADDITIONAL_FEED_PRECISION;
 
@@ -602,5 +604,30 @@ contract CVSEngine is ReentrancyGuard {
    */
   function getHealthFactor(address user) external view returns (uint256) {
     return _healthFactor(user);
+  }
+
+  function getMaxCvsToMint(address user) external view returns (uint256) {
+    uint256 collateralInUsd = getAccountCollateralValueInUSD(user);
+    uint256 debt = s_cvsMinted[user];
+
+    uint256 collateralAdjustedForThreshold = (collateralInUsd *
+      LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+
+    if (debt >= collateralAdjustedForThreshold) {
+      return 0;
+    }
+
+    return collateralAdjustedForThreshold - debt;
+  }
+
+  function calculateHealthFactor(
+    uint256 collateralInUsd,
+    uint256 debt
+  ) public pure returns (uint256) {
+    if (debt == 0) return type(uint256).max;
+    uint256 collateralAdjustedForThreshold = (collateralInUsd *
+      LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+
+    return (collateralAdjustedForThreshold * PRECISION) / debt;
   }
 }

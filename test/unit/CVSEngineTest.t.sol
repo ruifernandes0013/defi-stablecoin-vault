@@ -17,17 +17,21 @@ contract TestDecentralizedStableCoin is Test {
   address weth;
   address wbtc;
   address wethUsdPriceFeed;
+  address wbtcUsdPriceFeed;
   address user = makeAddr("user");
   address liquidator = makeAddr("liquidator");
   uint256 constant CVS_TO_MINT = 100 * 1e18;
   uint256 public constant STARTING_USER_BALANCE = 10 ether;
   uint256 public constant STARTING_LIQUIDATOR_BALANCE = 200 ether;
+  address[] public tokens;
+  address[] public feeds;
 
   function setUp() public {
     DeployDecentralizedStableCoin deployer = new DeployDecentralizedStableCoin();
     (stableCoinToken, cvsEngine, helperConfig) = deployer.run();
 
-    (wethUsdPriceFeed, , weth, wbtc, ) = helperConfig.activeNetworkConfig();
+    (wethUsdPriceFeed, wbtcUsdPriceFeed, weth, wbtc, ) = helperConfig
+      .activeNetworkConfig();
     ERC20Mock(weth).mint(user, STARTING_USER_BALANCE);
   }
 
@@ -55,6 +59,27 @@ contract TestDecentralizedStableCoin is Test {
     );
     vm.stopPrank();
     _;
+  }
+
+  function testConstructorInitializesCorrectly() public {
+    tokens = [weth, wbtc];
+    feeds = [wethUsdPriceFeed, wbtcUsdPriceFeed];
+
+    CVSEngine engine = new CVSEngine(tokens, feeds, address(stableCoinToken));
+
+    address priceFeedInEngine = engine.getCollateralTokenPriceFeed(weth);
+    assertEq(priceFeedInEngine, wethUsdPriceFeed);
+    assertEq(address(engine.getCvsToken()), address(stableCoinToken));
+  }
+
+  function testConstructorRevertsIfArrayLengthsMismatch() public {
+    tokens = [weth];
+    feeds = [wethUsdPriceFeed, wbtcUsdPriceFeed];
+
+    vm.expectRevert(
+      CVSEngine.CVSEngine_TokenAddressesMustMatchPriceFeeds.selector
+    );
+    new CVSEngine(tokens, feeds, address(stableCoinToken));
   }
 
   function testDepositCollateralAndMintCvs() public overCollateralized {
@@ -369,5 +394,47 @@ contract TestDecentralizedStableCoin is Test {
     assertEq(cvsEngine.getLiquidationBonus(), 10); // e.g., 10%
     assertEq(cvsEngine.getLiquidationPrecision(), 100);
     assertEq(cvsEngine.getMinHealthFactor(), 1e18); // must be at least 1
+  }
+
+  function testMintCvsSucceedsWhenHealthy() public overCollateralized {
+    vm.startPrank(user);
+
+    uint256 additionalMint = 10 * 1e18;
+    stableCoinToken.approve(address(cvsEngine), additionalMint);
+    cvsEngine.mintCvs(additionalMint);
+
+    uint256 totalDebt = cvsEngine.getCvsMinted(user);
+    assertEq(totalDebt, CVS_TO_MINT + additionalMint);
+
+    uint256 balance = stableCoinToken.balanceOf(user);
+    assertEq(balance, CVS_TO_MINT + additionalMint);
+
+    vm.stopPrank();
+  }
+
+  function testMintCvsFailsWithZeroAmount() public {
+    vm.startPrank(user);
+    vm.expectRevert(CVSEngine.CVSEngine_AmountMustBeHigherThanZero.selector);
+    cvsEngine.mintCvs(0);
+    vm.stopPrank();
+  }
+
+  function testMintCvsFailsIfHealthFactorBreaks() public overCollateralized {
+    vm.startPrank(user);
+
+    // Set ETH price extremely low to simulate bad health factor
+    int256 ethUsdUpdatedPrice = 1e8;
+    MockV3Aggregator(wethUsdPriceFeed).updateAnswer(ethUsdUpdatedPrice);
+
+    vm.expectRevert(
+      abi.encodeWithSelector(
+        CVSEngine.CVSEngine_HealthFactorTooLow.selector,
+        uint256(45454545454545454),
+        uint256(cvsEngine.getPrecision())
+      )
+    );
+    cvsEngine.mintCvs(10 * 1e18);
+
+    vm.stopPrank();
   }
 }
